@@ -1,0 +1,970 @@
+-- Crypt Packet Lagger | Improved UI + Bubbly Animations + Purple Particles
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 15)
+if not PlayerGui then return end
+
+if _G.__CryptHubCleanup then
+	pcall(_G.__CryptHubCleanup)
+	_G.__CryptHubCleanup = nil
+end
+
+for _, child in ipairs(PlayerGui:GetChildren()) do
+	if child.Name == "CryptHub" then
+		child:Destroy()
+	end
+end
+
+-- Theme
+local PURPLE_DARK   = Color3.fromRGB(75, 25, 120)
+local PURPLE_MAIN   = Color3.fromRGB(145, 55, 220)
+local PURPLE_BRIGHT = Color3.fromRGB(185, 100, 255)
+local BG_DARK    = Color3.fromRGB(11, 11, 11)
+local BG_PANEL   = Color3.fromRGB(18, 18, 18)
+local TEXT_WHITE = Color3.fromRGB(245, 245, 245)
+local TEXT_GRAY  = Color3.fromRGB(165, 165, 165)
+
+local function AddStroke(color, thickness, transparency, parent)
+	local s = Instance.new("UIStroke")
+	s.Color = color
+	s.Thickness = thickness
+	s.Transparency = transparency
+	s.Parent = parent
+	return s
+end
+
+local function AddCorner(radius, parent)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, radius)
+	c.Parent = parent
+	return c
+end
+
+local function ClampScale(v)
+	return math.clamp(math.floor(((v - 0.5) / 0.1) + 0.5) * 0.1 + 0.5, 0.5, 1.5)
+end
+
+-- State
+local GuiScale = 0.7
+local IsLagging = false
+local Keybind = nil
+local KeybindType = nil
+local IsListening = false
+local LagThread = nil
+local LagStartTime = 0
+local CurrentTab = "PC"
+local SpeedEnabled = false
+local SpeedStuds = 15
+local SpeedInterval = 0.06
+local CustomIntensity = 75000
+local Connections = {}
+
+local function Connect(signal, fn)
+	local c = signal:Connect(fn)
+	table.insert(Connections, c)
+	return c
+end
+
+local function Save()
+	pcall(function()
+		writefile("packetlaggg.json", HttpService:JSONEncode({
+			Tab = CurrentTab,
+			GuiSize = GuiScale,
+			Toggle = IsLagging,
+			Keybind = Keybind and { Name = Keybind.Name, Type = KeybindType } or nil,
+			SpeedEnabled = SpeedEnabled,
+			SpeedStuds = SpeedStuds,
+			SpeedInterval = SpeedInterval,
+			CustomIntensity = CustomIntensity
+		}))
+	end)
+end
+
+local function Load()
+	if not isfile("packetlaggg.json") then return end
+	local ok, data = pcall(function()
+		return HttpService:JSONDecode(readfile("packetlaggg.json"))
+	end)
+	if not ok or type(data) ~= "table" then return end
+
+	if data.Tab == "PC" or data.Tab == "Mobile" or data.Tab == "Custom" then CurrentTab = data.Tab end
+	if data.GuiSize then GuiScale = ClampScale(tonumber(data.GuiSize) or 0.7) end
+	if data.Toggle ~= nil then IsLagging = data.Toggle end
+	if data.Keybind and type(data.Keybind) == "table" and data.Keybind.Name then
+		local kc = Enum.KeyCode[data.Keybind.Name]
+		if kc then
+			Keybind = kc
+			KeybindType = data.Keybind.Type or "Keyboard"
+		end
+	end
+	if data.SpeedEnabled ~= nil then SpeedEnabled = data.SpeedEnabled end
+	if data.SpeedStuds then SpeedStuds = tonumber(data.SpeedStuds) or 15 end
+	if data.SpeedInterval then SpeedInterval = tonumber(data.SpeedInterval) or 0.06 end
+	if data.CustomIntensity then
+		CustomIntensity = math.clamp(tonumber(data.CustomIntensity) or 75000, 1, 500000)
+	end
+end
+
+Load()
+
+-- Packet Lag
+local NetRemote = nil
+pcall(function()
+	local net = ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net")
+	NetRemote = net:GetChildren()[230]
+end)
+
+local function GetIntensity()
+	if CurrentTab == "PC" then return 50000 end
+	if CurrentTab == "Mobile" then return 25000 end
+	return CustomIntensity
+end
+
+local function FireLag(count)
+	if not NetRemote then
+		pcall(function()
+			local net = ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Net")
+			NetRemote = net:GetChildren()[230]
+		end)
+		if not NetRemote then return end
+	end
+	local payload = table.create(count, function() end)
+	for _ = 1, 3 do
+		pcall(function() NetRemote:FireServer(payload) end)
+	end
+end
+
+local function LagLoop()
+	while IsLagging do
+		task.spawn(function() FireLag(GetIntensity()) end)
+		task.wait(0.01)
+	end
+end
+
+local function StartLag()
+	if LagThread and coroutine.status(LagThread) ~= "dead" then return end
+	IsLagging = true
+	LagStartTime = os.clock()
+	LagThread = coroutine.create(LagLoop)
+	coroutine.resume(LagThread)
+end
+
+local function StopLag()
+	IsLagging = false
+	if LagThread then
+		pcall(function() coroutine.close(LagThread) end)
+		LagThread = nil
+	end
+end
+
+-- Clean textures
+for _, v in pairs(workspace:GetDescendants()) do
+	if v:IsA("Texture") or v:IsA("Decal") then
+		v:Destroy()
+	elseif v:IsA("Part") and v.Material ~= Enum.Material.Neon and v.Material ~= Enum.Material.ForceField then
+		v.Material = Enum.Material.SmoothPlastic
+	end
+end
+
+-- ===================== GUI =====================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CryptHub"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999
+ScreenGui.Parent = PlayerGui
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.AnchorPoint = Vector2.new(0.5, 0.5)
+Main.Position = UDim2.new(0.5, 0, 0.5, 0)
+Main.Size = UDim2.new(0, 320, 0, 430)
+Main.BackgroundColor3 = Color3.fromRGB(9, 9, 9)
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.ClipsDescendants = true
+Main.Parent = ScreenGui
+AddCorner(18, Main)
+AddStroke(PURPLE_MAIN, 1.7, 0.18, Main)
+
+local UIScale = Instance.new("UIScale")
+UIScale.Scale = GuiScale
+UIScale.Parent = Main
+
+-- Background Image
+local BgImage = Instance.new("ImageLabel")
+BgImage.Size = UDim2.new(1, 0, 1, 0)
+BgImage.BackgroundTransparency = 1
+BgImage.Image = "rbxassetid://"
+BgImage.ScaleType = Enum.ScaleType.Crop
+BgImage.ImageTransparency = 0.48
+BgImage.ZIndex = 1
+BgImage.Parent = Main
+AddCorner(18, BgImage)
+
+-- Particle Container
+local ParticleFolder = Instance.new("Folder")
+ParticleFolder.Name = "Particles"
+ParticleFolder.Parent = Main
+
+-- ========== HEADER ==========
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, -24, 0, 56)
+Header.Position = UDim2.new(0, 12, 0, 12)
+Header.BackgroundColor3 = BG_DARK
+Header.BackgroundTransparency = 0.28
+Header.BorderSizePixel = 0
+Header.ZIndex = 5
+Header.Parent = Main
+AddCorner(14, Header)
+AddStroke(PURPLE_MAIN, 1.1, 0.45, Header)
+
+-- Title
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(0, 110, 0, 24)
+Title.Position = UDim2.new(0, 14, 0, 8)
+Title.BackgroundTransparency = 1
+Title.Text = "Crypt"
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 20
+Title.TextColor3 = PURPLE_BRIGHT
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.ZIndex = 6
+Title.Parent = Header
+
+local SubTitle = Instance.new("TextLabel")
+SubTitle.Size = UDim2.new(0, 110, 0, 14)
+SubTitle.Position = UDim2.new(0, 14, 0, 32)
+SubTitle.BackgroundTransparency = 1
+SubTitle.Text = "#1 Packet Lagger"
+SubTitle.Font = Enum.Font.Gotham
+SubTitle.TextSize = 11
+SubTitle.TextColor3 = TEXT_GRAY
+SubTitle.TextXAlignment = Enum.TextXAlignment.Left
+SubTitle.ZIndex = 6
+SubTitle.Parent = Header
+
+-- Size Adjust
+local ScaleFrame = Instance.new("Frame")
+ScaleFrame.Size = UDim2.new(0, 86, 0, 28)
+ScaleFrame.Position = UDim2.new(0, 130, 0.5, -14)
+ScaleFrame.BackgroundColor3 = BG_PANEL
+ScaleFrame.BorderSizePixel = 0
+ScaleFrame.ZIndex = 6
+ScaleFrame.Parent = Header
+AddCorner(8, ScaleFrame)
+AddStroke(PURPLE_MAIN, 1, 0.4, ScaleFrame)
+
+local MinusBtn = Instance.new("TextButton")
+MinusBtn.Size = UDim2.new(0, 26, 1, 0)
+MinusBtn.BackgroundTransparency = 1
+MinusBtn.Text = "−"
+MinusBtn.Font = Enum.Font.GothamBold
+MinusBtn.TextSize = 18
+MinusBtn.TextColor3 = TEXT_WHITE
+MinusBtn.AutoButtonColor = false
+MinusBtn.ZIndex = 7
+MinusBtn.Parent = ScaleFrame
+
+local ScaleText = Instance.new("TextLabel")
+ScaleText.Size = UDim2.new(0, 34, 1, 0)
+ScaleText.Position = UDim2.new(0, 26, 0, 0)
+ScaleText.BackgroundTransparency = 1
+ScaleText.Text = "70%"
+ScaleText.Font = Enum.Font.GothamBold
+ScaleText.TextSize = 12
+ScaleText.TextColor3 = TEXT_WHITE
+ScaleText.TextXAlignment = Enum.TextXAlignment.Center
+ScaleText.ZIndex = 7
+ScaleText.Parent = ScaleFrame
+
+local PlusBtn = Instance.new("TextButton")
+PlusBtn.Size = UDim2.new(0, 26, 1, 0)
+PlusBtn.Position = UDim2.new(1, -26, 0, 0)
+PlusBtn.BackgroundTransparency = 1
+PlusBtn.Text = "+"
+PlusBtn.Font = Enum.Font.GothamBold
+PlusBtn.TextSize = 18
+PlusBtn.TextColor3 = TEXT_WHITE
+PlusBtn.AutoButtonColor = false
+PlusBtn.ZIndex = 7
+PlusBtn.Parent = ScaleFrame
+
+local function UpdateScaleText()
+	ScaleText.Text = tostring(math.floor(GuiScale * 100 + 0.5)) .. "%"
+end
+
+Connect(MinusBtn.MouseButton1Click, function()
+	GuiScale = ClampScale(GuiScale - 0.1)
+	UIScale.Scale = GuiScale
+	UpdateScaleText()
+	Save()
+end)
+Connect(PlusBtn.MouseButton1Click, function()
+	GuiScale = ClampScale(GuiScale + 0.1)
+	UIScale.Scale = GuiScale
+	UpdateScaleText()
+	Save()
+end)
+
+-- Ping / FPS (right side)
+local PingLabel = Instance.new("TextLabel")
+PingLabel.Size = UDim2.new(0, 78, 0, 16)
+PingLabel.Position = UDim2.new(1, -90, 0, 10)
+PingLabel.BackgroundTransparency = 1
+PingLabel.Text = "Ping: 0ms"
+PingLabel.Font = Enum.Font.GothamBold
+PingLabel.TextSize = 11
+PingLabel.TextColor3 = TEXT_GRAY
+PingLabel.TextXAlignment = Enum.TextXAlignment.Right
+PingLabel.ZIndex = 6
+PingLabel.Parent = Header
+
+local FpsLabel = Instance.new("TextLabel")
+FpsLabel.Size = UDim2.new(0, 78, 0, 16)
+FpsLabel.Position = UDim2.new(1, -90, 0, 28)
+FpsLabel.BackgroundTransparency = 1
+FpsLabel.Text = "FPS: 0"
+FpsLabel.Font = Enum.Font.GothamBold
+FpsLabel.TextSize = 11
+FpsLabel.TextColor3 = TEXT_GRAY
+FpsLabel.TextXAlignment = Enum.TextXAlignment.Right
+FpsLabel.ZIndex = 6
+FpsLabel.Parent = Header
+
+-- ========== TABS ==========
+local TabFrame = Instance.new("Frame")
+TabFrame.Size = UDim2.new(1, -24, 0, 32)
+TabFrame.Position = UDim2.new(0, 12, 0, 76)
+TabFrame.BackgroundColor3 = BG_DARK
+TabFrame.BackgroundTransparency = 0.28
+TabFrame.BorderSizePixel = 0
+TabFrame.ZIndex = 5
+TabFrame.Parent = Main
+AddCorner(10, TabFrame)
+AddStroke(PURPLE_MAIN, 1, 0.45, TabFrame)
+
+local function CreateTab(name, xScale)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0.333, -5, 1, -6)
+	btn.Position = UDim2.new(xScale, 3, 0, 3)
+	btn.BackgroundColor3 = BG_PANEL
+	btn.BorderSizePixel = 0
+	btn.AutoButtonColor = false
+	btn.Text = name
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 12
+	btn.TextColor3 = TEXT_GRAY
+	btn.ZIndex = 6
+	btn.Parent = TabFrame
+	AddCorner(7, btn)
+	local stroke = AddStroke(PURPLE_MAIN, 1, 0.5, btn)
+	return btn, stroke
+end
+
+local TabPC, StrokePC = CreateTab("PC", 0)
+local TabMobile, StrokeMobile = CreateTab("MOBILE", 0.333)
+local TabCustom, StrokeCustom = CreateTab("CUSTOM", 0.666)
+
+local IntensityFrame = Instance.new("Frame")
+IntensityFrame.Size = UDim2.new(1, -24, 0, 38)
+IntensityFrame.Position = UDim2.new(0, 12, 0, 380)
+IntensityFrame.BackgroundColor3 = BG_DARK
+IntensityFrame.BackgroundTransparency = 0.28
+IntensityFrame.BorderSizePixel = 0
+IntensityFrame.Visible = false
+IntensityFrame.ZIndex = 5
+IntensityFrame.Parent = Main
+AddCorner(10, IntensityFrame)
+AddStroke(PURPLE_MAIN, 1, 0.45, IntensityFrame)
+
+local IntensityLabel = Instance.new("TextLabel")
+IntensityLabel.Size = UDim2.new(0, 80, 1, 0)
+IntensityLabel.Position = UDim2.new(0, 14, 0, 0)
+IntensityLabel.BackgroundTransparency = 1
+IntensityLabel.Text = "Intensity"
+IntensityLabel.Font = Enum.Font.GothamBold
+IntensityLabel.TextSize = 13
+IntensityLabel.TextColor3 = TEXT_GRAY
+IntensityLabel.TextXAlignment = Enum.TextXAlignment.Left
+IntensityLabel.ZIndex = 6
+IntensityLabel.Parent = IntensityFrame
+
+local IntensityBox = Instance.new("TextBox")
+IntensityBox.Size = UDim2.new(0, 120, 0, 26)
+IntensityBox.Position = UDim2.new(1, -134, 0.5, -13)
+IntensityBox.BackgroundColor3 = BG_PANEL
+IntensityBox.BorderSizePixel = 0
+IntensityBox.Text = tostring(CustomIntensity)
+IntensityBox.Font = Enum.Font.GothamBold
+IntensityBox.TextSize = 13
+IntensityBox.TextColor3 = TEXT_WHITE
+IntensityBox.ClearTextOnFocus = false
+IntensityBox.ZIndex = 6
+IntensityBox.Parent = IntensityFrame
+AddCorner(7, IntensityBox)
+AddStroke(PURPLE_MAIN, 1, 0.35, IntensityBox)
+
+Connect(IntensityBox.FocusLost, function()
+	local n = tonumber(IntensityBox.Text)
+	if not n then
+		IntensityBox.Text = tostring(CustomIntensity)
+		return
+	end
+	CustomIntensity = math.clamp(math.floor(n), 1, 500000)
+	IntensityBox.Text = tostring(CustomIntensity)
+	Save()
+end)
+
+local function UpdateTabs()
+	local function set(btn, stroke, active)
+		if active then
+			btn.BackgroundColor3 = PURPLE_MAIN
+			btn.TextColor3 = TEXT_WHITE
+			stroke.Color = PURPLE_BRIGHT
+			stroke.Transparency = 0.05
+		else
+			btn.BackgroundColor3 = BG_PANEL
+			btn.TextColor3 = TEXT_GRAY
+			stroke.Color = PURPLE_MAIN
+			stroke.Transparency = 0.5
+		end
+	end
+	set(TabPC, StrokePC, CurrentTab == "PC")
+	set(TabMobile, StrokeMobile, CurrentTab == "Mobile")
+	set(TabCustom, StrokeCustom, CurrentTab == "Custom")
+	IntensityFrame.Visible = CurrentTab == "Custom"
+end
+
+Connect(TabPC.MouseButton1Click, function() CurrentTab = "PC" UpdateTabs() Save() end)
+Connect(TabMobile.MouseButton1Click, function() CurrentTab = "Mobile" UpdateTabs() Save() end)
+Connect(TabCustom.MouseButton1Click, function() CurrentTab = "Custom" UpdateTabs() Save() end)
+
+-- ========== STATUS ==========
+local StatusFrame = Instance.new("Frame")
+StatusFrame.Size = UDim2.new(1, -24, 0, 36)
+StatusFrame.Position = UDim2.new(0, 12, 0, 116)
+StatusFrame.BackgroundColor3 = BG_DARK
+StatusFrame.BackgroundTransparency = 0.28
+StatusFrame.BorderSizePixel = 0
+StatusFrame.ZIndex = 5
+StatusFrame.Parent = Main
+AddCorner(10, StatusFrame)
+AddStroke(PURPLE_MAIN, 1, 0.45, StatusFrame)
+
+local StatusDot = Instance.new("Frame")
+StatusDot.Size = UDim2.new(0, 10, 0, 10)
+StatusDot.Position = UDim2.new(0, 14, 0.5, -5)
+StatusDot.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
+StatusDot.BorderSizePixel = 0
+StatusDot.ZIndex = 6
+StatusDot.Parent = StatusFrame
+AddCorner(5, StatusDot)
+
+local StatusText = Instance.new("TextLabel")
+StatusText.Size = UDim2.new(0, 100, 1, 0)
+StatusText.Position = UDim2.new(0, 32, 0, 0)
+StatusText.BackgroundTransparency = 1
+StatusText.Text = "IDLE"
+StatusText.Font = Enum.Font.GothamBold
+StatusText.TextSize = 13
+StatusText.TextColor3 = TEXT_GRAY
+StatusText.TextXAlignment = Enum.TextXAlignment.Left
+StatusText.ZIndex = 6
+StatusText.Parent = StatusFrame
+
+local TimerText = Instance.new("TextLabel")
+TimerText.Size = UDim2.new(0, 60, 1, 0)
+TimerText.Position = UDim2.new(1, -72, 0, 0)
+TimerText.BackgroundTransparency = 1
+TimerText.Text = "00:00"
+TimerText.Font = Enum.Font.GothamMedium
+TimerText.TextSize = 13
+TimerText.TextColor3 = TEXT_GRAY
+TimerText.TextXAlignment = Enum.TextXAlignment.Right
+TimerText.ZIndex = 6
+TimerText.Parent = StatusFrame
+
+-- ========== PACKET LAGGER ==========
+local PacketHeader = Instance.new("TextLabel")
+PacketHeader.Size = UDim2.new(1, -24, 0, 18)
+PacketHeader.Position = UDim2.new(0, 12, 0, 160)
+PacketHeader.BackgroundTransparency = 1
+PacketHeader.Text = "PACKET LAGGER"
+PacketHeader.Font = Enum.Font.GothamBold
+PacketHeader.TextSize = 12
+PacketHeader.TextColor3 = PURPLE_BRIGHT
+PacketHeader.TextXAlignment = Enum.TextXAlignment.Left
+PacketHeader.ZIndex = 5
+PacketHeader.Parent = Main
+
+local PacketFrame = Instance.new("Frame")
+PacketFrame.Size = UDim2.new(1, -24, 0, 52)
+PacketFrame.Position = UDim2.new(0, 12, 0, 180)
+PacketFrame.BackgroundColor3 = BG_DARK
+PacketFrame.BackgroundTransparency = 0.28
+PacketFrame.BorderSizePixel = 0
+PacketFrame.ZIndex = 5
+PacketFrame.Parent = Main
+AddCorner(12, PacketFrame)
+AddStroke(PURPLE_MAIN, 1, 0.45, PacketFrame)
+
+-- Keybind
+local KeybindBtn = Instance.new("TextButton")
+KeybindBtn.Size = UDim2.new(0, 100, 0, 32)
+KeybindBtn.Position = UDim2.new(0, 12, 0.5, -16)
+KeybindBtn.BackgroundColor3 = BG_PANEL
+KeybindBtn.BorderSizePixel = 0
+KeybindBtn.AutoButtonColor = false
+KeybindBtn.Text = Keybind and Keybind.Name or "?"
+KeybindBtn.Font = Enum.Font.GothamBold
+KeybindBtn.TextSize = 13
+KeybindBtn.TextColor3 = TEXT_WHITE
+KeybindBtn.ZIndex = 6
+KeybindBtn.Parent = PacketFrame
+AddCorner(9, KeybindBtn)
+local KeybindStroke = AddStroke(PURPLE_MAIN, 1.2, 0.35, KeybindBtn)
+
+-- Main Toggle
+local ToggleTrack = Instance.new("Frame")
+ToggleTrack.Size = UDim2.new(0, 58, 0, 30)
+ToggleTrack.Position = UDim2.new(1, -74, 0.5, -15)
+ToggleTrack.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+ToggleTrack.BorderSizePixel = 0
+ToggleTrack.ZIndex = 6
+ToggleTrack.Parent = PacketFrame
+AddCorner(15, ToggleTrack)
+AddStroke(PURPLE_MAIN, 1.1, 0.4, ToggleTrack)
+
+local ToggleFill = Instance.new("Frame")
+ToggleFill.Size = UDim2.new(0, 0, 1, 0)
+ToggleFill.BackgroundColor3 = PURPLE_MAIN
+ToggleFill.BorderSizePixel = 0
+ToggleFill.ZIndex = 7
+ToggleFill.Parent = ToggleTrack
+AddCorner(15, ToggleFill)
+
+local ToggleKnob = Instance.new("Frame")
+ToggleKnob.Size = UDim2.new(0, 24, 0, 24)
+ToggleKnob.Position = UDim2.new(0, 3, 0.5, -12)
+ToggleKnob.BackgroundColor3 = Color3.fromRGB(170, 170, 170)
+ToggleKnob.BorderSizePixel = 0
+ToggleKnob.ZIndex = 8
+ToggleKnob.Parent = ToggleTrack
+AddCorner(12, ToggleKnob)
+local KnobStroke = AddStroke(PURPLE_MAIN, 1, 0.4, ToggleKnob)
+
+local ToggleClick = Instance.new("TextButton")
+ToggleClick.Size = UDim2.new(1, 0, 1, 0)
+ToggleClick.BackgroundTransparency = 1
+ToggleClick.Text = ""
+ToggleClick.ZIndex = 9
+ToggleClick.Parent = ToggleTrack
+
+-- Bubbly Animation helper
+local function BubbleTween(obj, goal, time)
+	local info = TweenInfo.new(time or 0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	TweenService:Create(obj, info, goal):Play()
+end
+
+local function SetToggleVisual(on)
+	if on then
+		ToggleTrack.BackgroundColor3 = PURPLE_MAIN
+		ToggleFill.BackgroundColor3 = PURPLE_BRIGHT
+		ToggleFill:TweenSize(UDim2.new(1, 0, 1, 0), "Out", "Quad", 0.18, true)
+		ToggleKnob:TweenPosition(UDim2.new(0, 31, 0.5, -12), "Out", "Back", 0.22, true)
+		ToggleKnob.BackgroundColor3 = TEXT_WHITE
+		KnobStroke.Color = PURPLE_BRIGHT
+
+		ToggleKnob.Size = UDim2.new(0, 28, 0, 28)
+		BubbleTween(ToggleKnob, {Size = UDim2.new(0, 24, 0, 24)}, 0.25)
+	else
+		ToggleTrack.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+		ToggleFill.BackgroundColor3 = PURPLE_MAIN
+		ToggleFill:TweenSize(UDim2.new(0, 0, 1, 0), "Out", "Quad", 0.18, true)
+		ToggleKnob:TweenPosition(UDim2.new(0, 3, 0.5, -12), "Out", "Back", 0.22, true)
+		ToggleKnob.BackgroundColor3 = Color3.fromRGB(170, 170, 170)
+		KnobStroke.Color = PURPLE_MAIN
+	end
+end
+
+local function UpdateStatus()
+	if IsLagging then
+		StatusDot.BackgroundColor3 = PURPLE_BRIGHT
+		StatusText.Text = "ACTIVE"
+		StatusText.TextColor3 = PURPLE_BRIGHT
+	else
+		StatusDot.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
+		StatusText.Text = "IDLE"
+		StatusText.TextColor3 = TEXT_GRAY
+	end
+end
+
+local function ToggleLag(state)
+	if state then
+		StartLag()
+		SetToggleVisual(true)
+	else
+		StopLag()
+		SetToggleVisual(false)
+	end
+	UpdateStatus()
+	Save()
+end
+
+Connect(ToggleClick.MouseButton1Click, function()
+	ToggleLag(not IsLagging)
+end)
+
+-- Keybind
+Connect(KeybindBtn.MouseButton1Click, function()
+	IsListening = true
+	KeybindBtn.Text = "..."
+	KeybindStroke.Color = PURPLE_BRIGHT
+end)
+
+Connect(UserInputService.InputBegan, function(input, gameProcessed)
+	if IsListening then
+		if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+			Keybind = input.KeyCode
+			KeybindType = "Keyboard"
+			KeybindBtn.Text = input.KeyCode.Name
+			KeybindStroke.Color = PURPLE_MAIN
+			IsListening = false
+			Save()
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.Gamepad1 and input.KeyCode ~= Enum.KeyCode.Unknown then
+			Keybind = input.KeyCode
+			KeybindType = "Gamepad"
+			KeybindBtn.Text = input.KeyCode.Name
+			KeybindStroke.Color = PURPLE_MAIN
+			IsListening = false
+			Save()
+			return
+		end
+		return
+	end
+
+	if gameProcessed or not Keybind then return end
+	if input.KeyCode ~= Keybind then return end
+	if KeybindType == "Keyboard" and input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+	if KeybindType == "Gamepad" and input.UserInputType ~= Enum.UserInputType.Gamepad1 then return end
+
+	ToggleLag(not IsLagging)
+end)
+
+-- ========== SPEED ==========
+local SpeedHeader = Instance.new("TextLabel")
+SpeedHeader.Size = UDim2.new(1, -24, 0, 18)
+SpeedHeader.Position = UDim2.new(0, 12, 0, 242)
+SpeedHeader.BackgroundTransparency = 1
+SpeedHeader.Text = "Cframe"
+SpeedHeader.Font = Enum.Font.GothamBold
+SpeedHeader.TextSize = 12
+SpeedHeader.TextColor3 = PURPLE_BRIGHT
+SpeedHeader.TextXAlignment = Enum.TextXAlignment.Left
+SpeedHeader.ZIndex = 5
+SpeedHeader.Parent = Main
+
+local SpeedFrame = Instance.new("Frame")
+SpeedFrame.Size = UDim2.new(1, -24, 0, 52)
+SpeedFrame.Position = UDim2.new(0, 12, 0, 262)
+SpeedFrame.BackgroundColor3 = BG_DARK
+SpeedFrame.BackgroundTransparency = 0.28
+SpeedFrame.BorderSizePixel = 0
+SpeedFrame.ZIndex = 5
+SpeedFrame.Parent = Main
+AddCorner(12, SpeedFrame)
+AddStroke(PURPLE_MAIN, 1, 0.45, SpeedFrame)
+
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0, 80, 1, 0)
+SpeedLabel.Position = UDim2.new(0, 16, 0, 0)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "Cframe Walk"
+SpeedLabel.Font = Enum.Font.GothamBold
+SpeedLabel.TextSize = 14
+SpeedLabel.TextColor3 = TEXT_WHITE
+SpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+SpeedLabel.ZIndex = 6
+SpeedLabel.Parent = SpeedFrame
+
+local SpeedTrack = Instance.new("Frame")
+SpeedTrack.Size = UDim2.new(0, 58, 0, 30)
+SpeedTrack.Position = UDim2.new(1, -74, 0.5, -15)
+SpeedTrack.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+SpeedTrack.BorderSizePixel = 0
+SpeedTrack.ZIndex = 6
+SpeedTrack.Parent = SpeedFrame
+AddCorner(15, SpeedTrack)
+AddStroke(PURPLE_MAIN, 1.1, 0.4, SpeedTrack)
+
+local SpeedFill = Instance.new("Frame")
+SpeedFill.Size = UDim2.new(0, 0, 1, 0)
+SpeedFill.BackgroundColor3 = PURPLE_MAIN
+SpeedFill.BorderSizePixel = 0
+SpeedFill.ZIndex = 7
+SpeedFill.Parent = SpeedTrack
+AddCorner(15, SpeedFill)
+
+local SpeedKnob = Instance.new("Frame")
+SpeedKnob.Size = UDim2.new(0, 24, 0, 24)
+SpeedKnob.Position = UDim2.new(0, 3, 0.5, -12)
+SpeedKnob.BackgroundColor3 = Color3.fromRGB(170, 170, 170)
+SpeedKnob.BorderSizePixel = 0
+SpeedKnob.ZIndex = 8
+SpeedKnob.Parent = SpeedTrack
+AddCorner(12, SpeedKnob)
+local SpeedKnobStroke = AddStroke(PURPLE_MAIN, 1, 0.4, SpeedKnob)
+
+local SpeedClick = Instance.new("TextButton")
+SpeedClick.Size = UDim2.new(1, 0, 1, 0)
+SpeedClick.BackgroundTransparency = 1
+SpeedClick.Text = ""
+SpeedClick.ZIndex = 9
+SpeedClick.Parent = SpeedTrack
+
+local function SetSpeedVisual(on)
+	if on then
+		SpeedTrack.BackgroundColor3 = PURPLE_MAIN
+		SpeedFill.BackgroundColor3 = PURPLE_BRIGHT
+		SpeedFill:TweenSize(UDim2.new(1, 0, 1, 0), "Out", "Quad", 0.18, true)
+		SpeedKnob:TweenPosition(UDim2.new(0, 31, 0.5, -12), "Out", "Back", 0.22, true)
+		SpeedKnob.BackgroundColor3 = TEXT_WHITE
+		SpeedKnobStroke.Color = PURPLE_BRIGHT
+
+		SpeedKnob.Size = UDim2.new(0, 28, 0, 28)
+		BubbleTween(SpeedKnob, {Size = UDim2.new(0, 24, 0, 24)}, 0.25)
+	else
+		SpeedTrack.BackgroundColor3 = Color3.fromRGB(38, 38, 38)
+		SpeedFill.BackgroundColor3 = PURPLE_MAIN
+		SpeedFill:TweenSize(UDim2.new(0, 0, 1, 0), "Out", "Quad", 0.18, true)
+		SpeedKnob:TweenPosition(UDim2.new(0, 3, 0.5, -12), "Out", "Back", 0.22, true)
+		SpeedKnob.BackgroundColor3 = Color3.fromRGB(170, 170, 170)
+		SpeedKnobStroke.Color = PURPLE_MAIN
+	end
+end
+
+Connect(SpeedClick.MouseButton1Click, function()
+	SpeedEnabled = not SpeedEnabled
+	SetSpeedVisual(SpeedEnabled)
+	Save()
+end)
+
+-- Studs / Interval
+local ValuesFrame = Instance.new("Frame")
+ValuesFrame.Size = UDim2.new(1, -24, 0, 40)
+ValuesFrame.Position = UDim2.new(0, 12, 0, 322)
+ValuesFrame.BackgroundColor3 = BG_DARK
+ValuesFrame.BackgroundTransparency = 0.28
+ValuesFrame.BorderSizePixel = 0
+ValuesFrame.ZIndex = 5
+ValuesFrame.Parent = Main
+AddCorner(10, ValuesFrame)
+AddStroke(PURPLE_MAIN, 1, 0.45, ValuesFrame)
+
+local StudsLabel = Instance.new("TextLabel")
+StudsLabel.Size = UDim2.new(0, 48, 1, 0)
+StudsLabel.Position = UDim2.new(0, 14, 0, 0)
+StudsLabel.BackgroundTransparency = 1
+StudsLabel.Text = "Studs"
+StudsLabel.Font = Enum.Font.GothamBold
+StudsLabel.TextSize = 13
+StudsLabel.TextColor3 = TEXT_GRAY
+StudsLabel.TextXAlignment = Enum.TextXAlignment.Left
+StudsLabel.ZIndex = 6
+StudsLabel.Parent = ValuesFrame
+
+local StudsBox = Instance.new("TextBox")
+StudsBox.Size = UDim2.new(0, 52, 0, 26)
+StudsBox.Position = UDim2.new(0, 64, 0.5, -13)
+StudsBox.BackgroundColor3 = BG_PANEL
+StudsBox.BorderSizePixel = 0
+StudsBox.Text = tostring(SpeedStuds)
+StudsBox.Font = Enum.Font.GothamBold
+StudsBox.TextSize = 13
+StudsBox.TextColor3 = TEXT_WHITE
+StudsBox.ClearTextOnFocus = false
+StudsBox.ZIndex = 6
+StudsBox.Parent = ValuesFrame
+AddCorner(7, StudsBox)
+AddStroke(PURPLE_MAIN, 1, 0.35, StudsBox)
+
+local IntervalLabel = Instance.new("TextLabel")
+IntervalLabel.Size = UDim2.new(0, 58, 1, 0)
+IntervalLabel.Position = UDim2.new(0.5, 10, 0, 0)
+IntervalLabel.BackgroundTransparency = 1
+IntervalLabel.Text = "Interval"
+IntervalLabel.Font = Enum.Font.GothamBold
+IntervalLabel.TextSize = 13
+IntervalLabel.TextColor3 = TEXT_GRAY
+IntervalLabel.TextXAlignment = Enum.TextXAlignment.Left
+IntervalLabel.ZIndex = 6
+IntervalLabel.Parent = ValuesFrame
+
+local IntervalBox = Instance.new("TextBox")
+IntervalBox.Size = UDim2.new(0, 52, 0, 26)
+IntervalBox.Position = UDim2.new(0.5, 70, 0.5, -13)
+IntervalBox.BackgroundColor3 = BG_PANEL
+IntervalBox.BorderSizePixel = 0
+IntervalBox.Text = tostring(SpeedInterval)
+IntervalBox.Font = Enum.Font.GothamBold
+IntervalBox.TextSize = 13
+IntervalBox.TextColor3 = TEXT_WHITE
+IntervalBox.ClearTextOnFocus = false
+IntervalBox.ZIndex = 6
+IntervalBox.Parent = ValuesFrame
+AddCorner(7, IntervalBox)
+AddStroke(PURPLE_MAIN, 1, 0.35, IntervalBox)
+
+Connect(StudsBox.FocusLost, function()
+	local n = tonumber(StudsBox.Text)
+	if not n then StudsBox.Text = tostring(SpeedStuds) return end
+	SpeedStuds = math.clamp(n, 1, 500)
+	StudsBox.Text = tostring(SpeedStuds)
+	Save()
+end)
+
+Connect(IntervalBox.FocusLost, function()
+	local n = tonumber(IntervalBox.Text)
+	if not n then IntervalBox.Text = tostring(SpeedInterval) return end
+	SpeedInterval = math.clamp(n, 0.01, 5)
+	IntervalBox.Text = tostring(SpeedInterval)
+	Save()
+end)
+
+-- Speed movement
+local accum = 0
+Connect(RunService.Heartbeat, function(dt)
+	if not IsLagging or not SpeedEnabled then return end
+	accum = accum + dt
+	if accum < SpeedInterval then return end
+	accum = 0
+
+	local char = LocalPlayer.Character
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hum or not hrp then return end
+
+	local dir = hum.MoveDirection
+	if dir.Magnitude > 0 then
+		hrp.CFrame = hrp.CFrame + (dir * SpeedStuds)
+	end
+end)
+
+-- ========== PURPLE PARTICLES ==========
+local function CreateParticle()
+	local p = Instance.new("Frame")
+	p.Size = UDim2.new(0, math.random(3, 6), 0, math.random(3, 6))
+	p.Position = UDim2.new(math.random(), 0, -0.05, 0)
+	p.BackgroundColor3 = Color3.fromRGB(math.random(150, 210), math.random(40, 90), 255)
+	p.BackgroundTransparency = math.random(20, 50) / 100
+	p.BorderSizePixel = 0
+	p.ZIndex = 2
+	p.Parent = ParticleFolder
+	AddCorner(10, p)
+
+	local duration = math.random(28, 48) / 10
+	local goalY = 1.1
+	local goalX = p.Position.X.Scale + (math.random(-15, 15) / 100)
+
+	local tween = TweenService:Create(p, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
+		Position = UDim2.new(goalX, 0, goalY, 0),
+		BackgroundTransparency = 1
+	})
+	tween:Play()
+	tween.Completed:Connect(function()
+		p:Destroy()
+	end)
+end
+
+-- Spawn particles continuously
+task.spawn(function()
+	while ScreenGui.Parent do
+		if math.random() > 0.35 then
+			CreateParticle()
+		end
+		task.wait(0.12)
+	end
+end)
+
+-- Ping + FPS
+task.spawn(function()
+	while true do
+		task.wait(1)
+		local ok, ping = pcall(function()
+			return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+		end)
+		if ok and ping then
+			PingLabel.Text = "Ping: " .. math.floor(ping) .. "ms"
+		end
+	end
+end)
+
+local frameCount, timeAccum = 0, 0
+Connect(RunService.Heartbeat, function(dt)
+	if IsLagging then
+		local t = math.floor(os.clock() - LagStartTime)
+		TimerText.Text = string.format("%02d:%02d", math.floor(t / 60), t % 60)
+	else
+		TimerText.Text = "00:00"
+	end
+
+	frameCount = frameCount + 1
+	timeAccum = timeAccum + dt
+	if timeAccum >= 0.5 then
+		FpsLabel.Text = "FPS: " .. math.floor(frameCount / timeAccum + 0.5)
+		frameCount, timeAccum = 0, 0
+	end
+end)
+
+-- Drag window
+local dragging = false
+local dragStart, startPos
+Connect(Header.InputBegan, function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = Main.Position
+	end
+end)
+Connect(UserInputService.InputChanged, function(input)
+	if not dragging then return end
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+	local delta = input.Position - dragStart
+	Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end)
+Connect(UserInputService.InputEnded, function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+
+-- Init
+UIScale.Scale = GuiScale
+UpdateScaleText()
+UpdateTabs()
+SetToggleVisual(IsLagging)
+SetSpeedVisual(SpeedEnabled)
+UpdateStatus()
+if IsLagging then StartLag() end
+
+function _G.__CryptHubCleanup()
+	StopLag()
+	for _, c in ipairs(Connections) do
+		pcall(function() c:Disconnect() end)
+	end
+	if ScreenGui then
+		pcall(function() ScreenGui:Destroy() end)
+	end
+end
